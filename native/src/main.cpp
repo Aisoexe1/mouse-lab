@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -375,7 +376,7 @@ static void OnFileDrop(GLFWwindow*, int count, const char** paths) {
     if (paths && paths[i]) gDroppedLuaPaths.emplace_back(paths[i]);
 }
 
-int main() {
+int main(int /*argc*/, char* argv[]) {
   if (!glfwInit()) return 1;
 
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -485,6 +486,24 @@ int main() {
     const size_t previousSize = luaTests.size();
     importLua(path);
     if (luaTests.size() > previousSize) luaTests.back().hotkey = hotkey;
+  }
+
+  // Auto-load all .lua files from the weapons/ folder next to the project root
+  {
+    namespace fs = std::filesystem;
+    const fs::path weaponsDir = fs::path(argv[0]).parent_path() / ".." / ".." / "weapons";
+    std::error_code ec;
+    if (fs::is_directory(weaponsDir, ec)) {
+      for (const auto& entry : fs::directory_iterator(weaponsDir, ec)) {
+        if (entry.path().extension() == ".lua") {
+          const std::string p = fs::canonical(entry.path(), ec).string();
+          if (ec) continue;
+          bool already = false;
+          for (const auto& t : luaTests) if (t.path == p) { already = true; break; }
+          if (!already) importLua(p);
+        }
+      }
+    }
   }
 
   float speedMult = 1.0f;
