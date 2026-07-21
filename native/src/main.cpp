@@ -382,6 +382,7 @@ int main(int /*argc*/, char* argv[]) {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
@@ -507,6 +508,8 @@ int main(int /*argc*/, char* argv[]) {
   }
 
   float speedMult = 1.0f;
+  bool  isDragging = false;
+  int   dragWX = 0, dragWY = 0;
 
   auto sectionHeader = [](const char* label) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -615,6 +618,46 @@ int main(int /*argc*/, char* argv[]) {
 
     ImGuiViewport* vp = ImGui::GetMainViewport();
     DrawParticles(vp, static_cast<float>(glfwGetTime()));
+
+    // --- Custom window controls (close / minimize) + drag ---
+    {
+      const ImVec2& mp = ImGui::GetIO().MousePos;
+      const float btnR  = 6.5f;
+      const float btnY  = vp->Pos.y + 18.0f;
+      const ImVec2 closeC(vp->Pos.x + 18.0f, btnY);
+      const ImVec2 miniC (vp->Pos.x + 38.0f, btnY);
+
+      // Drag zone: top strip, right of buttons
+      const bool inDragZone = mp.y >= vp->Pos.y && mp.y <= vp->Pos.y + 38.0f
+                           && mp.x  > vp->Pos.x + 58.0f;
+      if (ImGui::IsMouseClicked(0) && inDragZone) {
+        isDragging = true;
+        glfwGetWindowPos(window, &dragWX, &dragWY);
+      }
+      if (!ImGui::IsMouseDown(0)) isDragging = false;
+      if (isDragging) {
+        const ImVec2 delta = ImGui::GetMouseDragDelta(0, 0.0f);
+        glfwSetWindowPos(window, dragWX + (int)delta.x, dragWY + (int)delta.y);
+      }
+
+      // Draw buttons on foreground
+      ImDrawList* fdl = ImGui::GetForegroundDrawList();
+      const bool closeHov = std::hypot(mp.x - closeC.x, mp.y - closeC.y) < btnR + 2.0f;
+      const bool miniHov  = std::hypot(mp.x - miniC.x,  mp.y - miniC.y)  < btnR + 2.0f;
+
+      fdl->AddCircleFilled(closeC, btnR, closeHov ? IM_COL32(255, 65, 55, 255) : IM_COL32(185, 50, 42, 200));
+      if (closeHov) {
+        fdl->AddLine({closeC.x - 3, closeC.y - 3}, {closeC.x + 3, closeC.y + 3}, IM_COL32(100, 10, 5, 255), 1.4f);
+        fdl->AddLine({closeC.x + 3, closeC.y - 3}, {closeC.x - 3, closeC.y + 3}, IM_COL32(100, 10, 5, 255), 1.4f);
+      }
+      if (closeHov && ImGui::IsMouseClicked(0)) glfwSetWindowShouldClose(window, GLFW_TRUE);
+
+      fdl->AddCircleFilled(miniC, btnR, miniHov ? IM_COL32(235, 170, 0, 255) : IM_COL32(175, 128, 0, 200));
+      if (miniHov)
+        fdl->AddLine({miniC.x - 3.5f, miniC.y}, {miniC.x + 3.5f, miniC.y}, IM_COL32(100, 70, 0, 255), 1.6f);
+      if (miniHov && ImGui::IsMouseClicked(0)) glfwIconifyWindow(window);
+    }
+
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
     ImGui::SetNextWindowBgAlpha(0.0f);
@@ -637,7 +680,8 @@ int main(int /*argc*/, char* argv[]) {
         ImVec2(tlp.x + winW * 0.5f, tlp.y - 4), ImVec2(tlp.x + winW, tlp.y - 3),
         IM_COL32(65,115,220,160), IM_COL32(0,0,0,0), IM_COL32(0,0,0,0), IM_COL32(65,115,220,160));
 
-      // Title glow
+      // Title glow (shifted right to clear custom window buttons)
+      ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 52.0f);
       const char* title = "MOUSE LAB";
       const ImVec2 tPos = ImGui::GetCursorScreenPos();
       for (int d = 3; d >= 1; --d) {
