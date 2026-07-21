@@ -1,0 +1,17 @@
+# Build
+native/build/
+
+# Python
+app/.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Lua library state
+lua_tests.library
