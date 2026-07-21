@@ -1,0 +1,3 @@
+/Users/aisoexe/macro/native/build/CMakeFiles/mouse_test_injector_gui.dir
+/Users/aisoexe/macro/native/build/CMakeFiles/edit_cache.dir
+/Users/aisoexe/macro/native/build/CMakeFiles/rebuild_cache.dir
