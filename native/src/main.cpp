@@ -425,6 +425,7 @@ int main(int /*argc*/, char* argv[]) {
   size_t playIdx = 0;
   double nextSendTime = 0.0;
   double lastLogTime = 0.0;
+  float sensitivity = 1.0f;
 
   auto log = [&](const std::string& s) {
     const double t = glfwGetTime();
@@ -437,8 +438,10 @@ int main(int /*argc*/, char* argv[]) {
 
   auto sendStep = [&](const Step& s) {
     if (!serial.IsOpen()) return;
+    const int sdx = static_cast<int>(std::clamp(s.dx * sensitivity, -127.0f, 127.0f));
+    const int sdy = static_cast<int>(std::clamp(s.dy * sensitivity, -127.0f, 127.0f));
     char buf[64];
-    snprintf(buf, sizeof(buf), "M,%d,%d,%d", s.dx, s.dy, s.ButtonsMask());
+    snprintf(buf, sizeof(buf), "M,%d,%d,%d", sdx, sdy, s.ButtonsMask());
     if (serial.WriteLine(buf)) {
       log(std::string("-> ") + buf);
     } else {
@@ -950,6 +953,11 @@ int main(int /*argc*/, char* argv[]) {
         playing = false;
         log("-- playback stopped --");
       }
+
+      ImGui::Spacing();
+      ImGui::SetNextItemWidth(-1);
+      ImGui::SliderFloat("##sens", &sensitivity, 0.1f, 3.0f, "sens  %.2fx");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale dx/dy of all moves");
 
       if (playing && !steps.empty()) {
         ImGui::Spacing();

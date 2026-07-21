@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 weapons_extractor.py)",
+      "Bash(python3 /Users/aisoexe/macro/weapons_extractor.py)"
+    ]
+  }
+}
