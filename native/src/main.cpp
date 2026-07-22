@@ -571,14 +571,7 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == key) {
-              if (playing && selectedTestIdx == i) {
-                playing = false;
-                playingViaMouse = false;
-                log("-- stopped (hotkey) --");
-              } else {
-                selectedTestIdx = i;
-                playTest(i);
-              }
+              selectedTestIdx = i;
             }
           }
         }
@@ -605,14 +598,7 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == hotkey) {
-              if (playing && selectedTestIdx == i) {
-                playing = false;
-                playingViaMouse = false;
-                log("-- stopped (hotkey) --");
-              } else {
-                selectedTestIdx = i;
-                playTest(i);
-              }
+              selectedTestIdx = i;
             }
           }
         }
@@ -628,14 +614,7 @@ int main(int /*argc*/, char* argv[]) {
         if (vk == 0) continue;
         const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
         if (down && !keyWasDown[hotkey]) {
-          if (playing && selectedTestIdx == i) {
-            playing = false;
-            playingViaMouse = false;
-            log("-- stopped (hotkey) --");
-          } else {
-            selectedTestIdx = i;
-            playTest(i);
-          }
+          selectedTestIdx = i;
         }
         keyWasDown[hotkey] = down;
       }
@@ -656,14 +635,7 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == hotkey) {
-              if (playing && selectedTestIdx == i) {
-                playing = false;
-                playingViaMouse = false;
-                log("-- stopped (hotkey) --");
-              } else {
-                selectedTestIdx = i;
-                playTest(i);
-              }
+              selectedTestIdx = i;
             }
           }
         }
