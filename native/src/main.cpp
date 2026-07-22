@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -457,7 +458,9 @@ int main(int /*argc*/, char* argv[]) {
   float scriptSens = 0.8333f;
   float gameSens = 0.8333f;
   float smoothness = 1.0f;
+  float humanize = 0.15f;
   int subIdx = 0;
+  std::mt19937 rng(std::random_device{}());
 
   auto log = [&](const std::string& s) {
     const double t = glfwGetTime();
@@ -805,8 +808,25 @@ int main(int /*argc*/, char* argv[]) {
           Step sub = cs;
           sub.dx = static_cast<int>(std::round(cs.dx / static_cast<float>(nSub)));
           sub.dy = static_cast<int>(std::round(cs.dy / static_cast<float>(nSub)));
+
+          if (humanize > 0.0f) {
+            // Position noise: ±1px with probability proportional to humanize
+            std::uniform_real_distribution<float> coin(0.0f, 1.0f);
+            std::uniform_int_distribution<int>    px(-1, 1);
+            if (coin(rng) < humanize * 0.55f) sub.dx = std::clamp(sub.dx + px(rng), -127, 127);
+            if (coin(rng) < humanize * 0.55f) sub.dy = std::clamp(sub.dy + px(rng), -127, 127);
+          }
+
           sendStep(sub);
-          nextSendTime = now + cs.delayMs / 1000.0 / nSub;
+
+          // Timing jitter: ±(humanize * 12%) of the nominal interval
+          double nominalMs = cs.delayMs / 1000.0 / nSub;
+          double jitter = 0.0;
+          if (humanize > 0.0f) {
+            std::uniform_real_distribution<double> jd(-humanize * 0.12, humanize * 0.12);
+            jitter = nominalMs * jd(rng);
+          }
+          nextSendTime = now + nominalMs + jitter;
           if (++subIdx >= nSub) {
             subIdx = 0;
             playIdx++;
@@ -1193,6 +1213,9 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::SetNextItemWidth(-1);
       ImGui::SliderFloat("##smooth", &smoothness, 0.1f, 2.5f, "smooth  %.1f");
       if (ImGui::IsItemHovered()) ImGui::SetTooltip("Split each move into N sub-steps");
+      ImGui::SetNextItemWidth(-1);
+      ImGui::SliderFloat("##human", &humanize, 0.0f, 1.0f, "human  %.2f");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Position noise + timing jitter (0 = mechanical, 1 = max)");
 
       if (playing && !steps.empty()) {
         ImGui::Spacing();
