@@ -289,6 +289,16 @@ static void DrawParticles(const ImGuiViewport* vp, float time) {
 }
 
 
+#ifdef HAVE_EMBEDDED_WEAPONS
+static std::string DecryptWeapon(const char* data, std::size_t size, const char* key) {
+  std::string out(data, size);
+  const std::size_t klen = std::strlen(key);
+  for (std::size_t i = 0; i < size; ++i)
+    out[i] ^= key[i % klen];
+  return out;
+}
+#endif
+
 // Minimal parser for {"weaponname": [{dx, dy, delay}, ...]} weapon JSON format.
 static std::vector<Step> ParseJsonContent(const std::string& src, std::string& err) {
   const size_t arrStart = src.find('[');
@@ -485,7 +495,9 @@ int main(int /*argc*/, char* argv[]) {
       const std::string fname = pathArg.substr(kEmbedPfx.size());
       for (int i = 0; i < kEmbeddedWeaponCount; ++i) {
         if (fname == kEmbeddedWeapons[i].filename) {
-          std::string content(kEmbeddedWeapons[i].data, kEmbeddedWeapons[i].size);
+          std::string content = DecryptWeapon(kEmbeddedWeapons[i].data,
+                                              kEmbeddedWeapons[i].size,
+                                              kEmbeddedWeapons[i].filename);
           imported = ParseJsonContent(content, err);
           break;
         }
@@ -501,7 +513,9 @@ int main(int /*argc*/, char* argv[]) {
         const std::string fname = fs::path(pathArg).filename().string();
         for (int i = 0; i < kEmbeddedWeaponCount; ++i) {
           if (fname == kEmbeddedWeapons[i].filename) {
-            std::string content(kEmbeddedWeapons[i].data, kEmbeddedWeapons[i].size);
+            std::string content = DecryptWeapon(kEmbeddedWeapons[i].data,
+                                                kEmbeddedWeapons[i].size,
+                                                kEmbeddedWeapons[i].filename);
             std::string e2;
             auto attempt = ParseJsonContent(content, e2);
             if (!attempt.empty()) {
