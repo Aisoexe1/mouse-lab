@@ -14,13 +14,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install GLFW via vcpkg
-        run: |
-          vcpkg install glfw3:x64-windows
-          echo "vcpkg done, root: $env:VCPKG_INSTALLATION_ROOT"
+      - name: Install GLFW via vcpkg (static)
+        run: vcpkg install glfw3:x64-windows-static
 
       - name: Configure CMake
-        run: cmake -B build -S native -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows
+        run: cmake -B build -S native -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" -DVCPKG_TARGET_TRIPLET=x64-windows-static -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
 
       - name: Build
         run: cmake --build build --config Release
