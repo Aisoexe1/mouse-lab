@@ -395,13 +395,6 @@ int main(int /*argc*/, char* argv[]) {
   // Keep window floating above other apps (overlay behaviour).
   glfwSetWindowAttrib(window, GLFW_FLOATING, GLFW_TRUE);
 
-#ifdef _WIN32
-  // Remove from Alt+Tab switcher and taskbar on Windows.
-  HWND hwnd = glfwGetWin32Window(window);
-  LONG_PTR ex = GetWindowLongPtrA(hwnd, GWL_EXSTYLE);
-  SetWindowLongPtrA(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
-#endif
-
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   glfwSetDropCallback(window, OnFileDrop);
