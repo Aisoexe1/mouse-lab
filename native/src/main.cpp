@@ -3,12 +3,14 @@
 // or simulates them in-process (sim mode). Hotkey-bindable, toggle start/stop.
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <random>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -396,7 +398,7 @@ int main(int /*argc*/, char* argv[]) {
   glfwSetWindowAttrib(window, GLFW_FLOATING, GLFW_TRUE);
 
   glfwMakeContextCurrent(window);
-  glfwSwapInterval(1);
+  glfwSwapInterval(0);
   glfwSetDropCallback(window, OnFileDrop);
 
 #ifdef __APPLE__
@@ -791,7 +793,7 @@ int main(int /*argc*/, char* argv[]) {
         connectedPort = "";
         statusText = "disconnected";
       }
-      for (auto& l : lines) log(l);
+      for (auto& l : lines) if (l != "OK") log(l);
     }
 
     // Auto-scan ports every 2 s when not connected so hot-plugged devices appear.
@@ -1373,6 +1375,7 @@ int main(int /*argc*/, char* argv[]) {
     glClear(GL_COLOR_BUFFER_BIT);
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
     glfwSwapBuffers(window);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
   serial.Close();
