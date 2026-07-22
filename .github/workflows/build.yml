@@ -26,16 +26,23 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
-      - name: Upload EXE as artifact
+      - name: Package release zip
+        run: |
+          mkdir release
+          copy build\Release\mouse_test_injector_gui.exe release\
+          xcopy weapons release\weapons\ /E /I /Q
+          Compress-Archive -Path release\* -DestinationPath macro-windows.zip
+
+      - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: macro-windows
-          path: build/Release/mouse_test_injector_gui.exe
+          path: macro-windows.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: Latest Build
-          files: build/Release/mouse_test_injector_gui.exe
+          files: macro-windows.zip
           make_latest: true

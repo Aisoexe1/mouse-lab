@@ -371,7 +371,9 @@ int main(int /*argc*/, char* argv[]) {
   std::vector<char> globalSideMouseWasDown(8, false);
   bool prevGlobalRmb = false, prevGlobalLmb = false;
   bool rmbFirst = false, playingViaMouse = false;
-  const std::string libraryPath = "lua_tests.library";
+  namespace fs = std::filesystem;
+  const fs::path exeDir = fs::path(argv[0]).parent_path();
+  const std::string libraryPath = (exeDir / "lua_tests.library").string();
 
   std::vector<std::string> logLines;
   char jsonPathBuf[512] = "";
@@ -460,10 +462,13 @@ int main(int /*argc*/, char* argv[]) {
     if (luaTests.size() > previousSize) luaTests.back().hotkey = hotkey;
   }
 
-  // Auto-load all .json files from the weapons/ folder next to the project root
+  // Auto-load all .json files from weapons/ — look next to exe first (for users),
+  // then two levels up (for dev builds in native/build/).
   {
-    namespace fs = std::filesystem;
-    const fs::path weaponsDir = fs::path(argv[0]).parent_path() / ".." / ".." / "weapons";
+    fs::path weaponsDir = exeDir / "weapons";
+    std::error_code ecCheck;
+    if (!fs::is_directory(weaponsDir, ecCheck))
+      weaponsDir = exeDir / ".." / ".." / "weapons";
     std::error_code ec;
     if (fs::is_directory(weaponsDir, ec)) {
       for (const auto& entry : fs::directory_iterator(weaponsDir, ec)) {
