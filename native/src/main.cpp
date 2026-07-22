@@ -1,8 +1,6 @@
-// Mouse driver test injector - GUI front-end (C++/Dear ImGui).
-//
-// Talks to the Arduino Leonardo firmware in ../arduino/mouse_test_injector
-// over serial to build and play back relative-move test scenarios for
-// driver/firmware regression testing.
+// Macro by Aiso.exe — recoil-pattern playback tool.
+// Sends relative mouse-move commands to a hardware HID emulator over serial,
+// or simulates them in-process (sim mode). Hotkey-bindable, toggle start/stop.
 
 #include <algorithm>
 #include <cmath>
@@ -20,6 +18,7 @@
 
 #ifdef __APPLE__
 #include <CoreGraphics/CoreGraphics.h>
+#include <ApplicationServices/ApplicationServices.h>
 #endif
 
 #include "imgui.h"
@@ -145,7 +144,7 @@ static void ApplyDarkTheme() {
   style.GrabRounding = 9.0f;
   style.PopupRounding = 10.0f;
   style.ScrollbarRounding = 10.0f;
-  style.WindowPadding = ImVec2(22, 20);
+  style.WindowPadding = ImVec2(22, 14);
   style.FramePadding = ImVec2(11, 8);
   style.ItemSpacing = ImVec2(10, 10);
   style.ItemInnerSpacing = ImVec2(8, 6);
@@ -366,6 +365,17 @@ int main(int /*argc*/, char* argv[]) {
   glfwSwapInterval(1);
   glfwSetDropCallback(window, OnFileDrop);
 
+#ifdef __APPLE__
+  {
+    const void* keys[]   = { kAXTrustedCheckOptionPrompt };
+    const void* values[] = { kCFBooleanTrue };
+    CFDictionaryRef opts = CFDictionaryCreate(nullptr, keys, values, 1,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    AXIsProcessTrustedWithOptions(opts);
+    CFRelease(opts);
+  }
+#endif
+
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
   ImGui::GetIO().IniFilename = nullptr;
@@ -380,13 +390,14 @@ int main(int /*argc*/, char* argv[]) {
   bool connected = false;
   bool simulate = false;
   std::string statusText = "disconnected";
+  std::string connectedPort;
+  double lastPortScan = 0.0;
 
   std::vector<Step> steps;
   std::vector<LuaTest> luaTests;
   int selectedTestIdx = -1;
   int bindingTestIdx = -1;
   std::vector<char> keyWasDown(GLFW_KEY_LAST + 1, false);
-  std::vector<char> mouseWasDown(GLFW_MOUSE_BUTTON_LAST + 1, false);
   std::vector<char> globalSideMouseWasDown(8, false);
   bool prevGlobalRmb = false, prevGlobalLmb = false;
   bool rmbFirst = false, playingViaMouse = false;
@@ -426,11 +437,22 @@ int main(int /*argc*/, char* argv[]) {
       CFRelease(ref);
       pos.x += sdx;
       pos.y += sdy;
-      CGWarpMouseCursorPosition(pos);
+      if (AXIsProcessTrusted()) {
+        CGEventRef mv = CGEventCreateMouseEvent(nullptr, kCGEventMouseMoved, pos, kCGMouseButtonLeft);
+        CGEventSetIntegerValueField(mv, kCGMouseEventDeltaX, sdx);
+        CGEventSetIntegerValueField(mv, kCGMouseEventDeltaY, sdy);
+        CGEventPost(kCGHIDEventTap, mv);
+        CFRelease(mv);
+      } else {
+        CGWarpMouseCursorPosition(pos);
+      }
 #elif defined(_WIN32)
-      POINT pt;
-      GetCursorPos(&pt);
-      SetCursorPos(pt.x + sdx, pt.y + sdy);
+      INPUT inp = {};
+      inp.type = INPUT_MOUSE;
+      inp.mi.dwFlags = MOUSEEVENTF_MOVE;
+      inp.mi.dx = sdx;
+      inp.mi.dy = sdy;
+      SendInput(1, &inp, sizeof(INPUT));
 #endif
       return;
     }
@@ -505,8 +527,8 @@ int main(int /*argc*/, char* argv[]) {
     }
   }
 
-  bool  isDragging = false;
-  int   dragWX = 0, dragWY = 0;
+  bool   isDragging = false;
+  double dragCurX = 0, dragCurY = 0;
 
   auto sectionHeader = [](const char* label) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -519,8 +541,9 @@ int main(int /*argc*/, char* argv[]) {
 
   auto panelAccent = []() {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    const ImVec2 p = ImGui::GetWindowPos();
-    dl->AddRectFilled(p, ImVec2(p.x + 3, p.y + ImGui::GetWindowHeight()), IM_COL32(55, 105, 215, 140));
+    const ImVec2 p  = ImGui::GetWindowPos();
+    dl->AddRectFilled(ImVec2(p.x + 10, p.y), ImVec2(p.x + 13, p.y + ImGui::GetWindowHeight()),
+                      IM_COL32(55, 105, 215, 140));
   };
 
   while (!glfwWindowShouldClose(window)) {
@@ -548,8 +571,14 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == key) {
-              selectedTestIdx = i;
-              log("switched to: " + luaTests[i].name);
+              if (playing && selectedTestIdx == i) {
+                playing = false;
+                playingViaMouse = false;
+                log("-- stopped (hotkey) --");
+              } else {
+                selectedTestIdx = i;
+                playTest(i);
+              }
             }
           }
         }
@@ -576,8 +605,14 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == hotkey) {
-              selectedTestIdx = i;
-              log("switched to: " + luaTests[i].name);
+              if (playing && selectedTestIdx == i) {
+                playing = false;
+                playingViaMouse = false;
+                log("-- stopped (hotkey) --");
+              } else {
+                selectedTestIdx = i;
+                playTest(i);
+              }
             }
           }
         }
@@ -593,8 +628,14 @@ int main(int /*argc*/, char* argv[]) {
         if (vk == 0) continue;
         const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
         if (down && !keyWasDown[hotkey]) {
-          selectedTestIdx = i;
-          log("switched to: " + luaTests[i].name);
+          if (playing && selectedTestIdx == i) {
+            playing = false;
+            playingViaMouse = false;
+            log("-- stopped (hotkey) --");
+          } else {
+            selectedTestIdx = i;
+            playTest(i);
+          }
         }
         keyWasDown[hotkey] = down;
       }
@@ -615,8 +656,14 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == hotkey) {
-              selectedTestIdx = i;
-              log("switched to: " + luaTests[i].name);
+              if (playing && selectedTestIdx == i) {
+                playing = false;
+                playingViaMouse = false;
+                log("-- stopped (hotkey) --");
+              } else {
+                selectedTestIdx = i;
+                playTest(i);
+              }
             }
           }
         }
@@ -659,9 +706,23 @@ int main(int /*argc*/, char* argv[]) {
         log("!! device disconnected");
         serial.Close();
         connected = false;
+        connectedPort = "";
         statusText = "disconnected";
       }
       for (auto& l : lines) log(l);
+    }
+
+    // Auto-scan ports every 2 s when not connected so hot-plugged devices appear.
+    if (!connected) {
+      const double scanNow = glfwGetTime();
+      if (scanNow - lastPortScan > 2.0) {
+        lastPortScan = scanNow;
+        auto fresh = SerialPort::ListPorts();
+        if (fresh != availablePorts) {
+          availablePorts = fresh;
+          if (selectedPort >= (int)availablePorts.size()) selectedPort = 0;
+        }
+      }
     }
 
     // Scenario playback (time-based, non-blocking).
@@ -708,12 +769,16 @@ int main(int /*argc*/, char* argv[]) {
                            && mp.x  > vp->Pos.x + 58.0f;
       if (ImGui::IsMouseClicked(0) && inDragZone) {
         isDragging = true;
-        glfwGetWindowPos(window, &dragWX, &dragWY);
+        glfwGetCursorPos(window, &dragCurX, &dragCurY);
       }
       if (!ImGui::IsMouseDown(0)) isDragging = false;
       if (isDragging) {
-        const ImVec2 delta = ImGui::GetMouseDragDelta(0, 0.0f);
-        glfwSetWindowPos(window, dragWX + (int)delta.x, dragWY + (int)delta.y);
+        double curX, curY;
+        glfwGetCursorPos(window, &curX, &curY);
+        int wx, wy;
+        glfwGetWindowPos(window, &wx, &wy);
+        glfwSetWindowPos(window, wx + (int)(curX - dragCurX),
+                                 wy + (int)(curY - dragCurY));
       }
 
       // Draw buttons on foreground
@@ -773,18 +838,23 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::TextDisabled("-  Macro by Aiso.exe");
 
       // Device status (right-aligned)
-      ImGui::SameLine(winW - (connected ? 178.0f : 195.0f));
+      const char* statusLabel = connected  ? "[*] DEVICE ONLINE"
+                              : simulate   ? "[S] SIM MODE"
+                                           : "[ ] DEVICE OFFLINE";
+      ImGui::SameLine(winW - (connected ? 178.0f : simulate ? 158.0f : 195.0f));
       if (connected) {
         const float pulse = 0.70f + 0.30f * std::sin(now * 2.4f);
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.50f * pulse + 0.20f, pulse, 0.60f * pulse + 0.20f, 1.0f));
+      } else if (simulate) {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.65f, 0.75f, 1.00f, 1.0f));
       } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.75f, 1.0f));
       }
-      ImGui::Text("%s", connected ? "[*] DEVICE ONLINE" : "[ ] DEVICE OFFLINE");
+      ImGui::Text("%s", statusLabel);
       ImGui::PopStyleColor();
 
       // Subtitle
-      ImGui::TextDisabled("precision mouse input validation - send relative-move sequences to firmware");
+      ImGui::TextDisabled("recoil pattern playback  ·  bind hotkeys  ·  sim mode");
 
       // Gradient separator line below header
       const ImVec2 sep = ImGui::GetCursorScreenPos();
@@ -797,8 +867,11 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::Dummy(ImVec2(0, 5));
     }
 
-    ImGui::BeginChild("connection", ImVec2(0, 76), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
+    ImGui::BeginChild("connection", ImVec2(0, 62), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
     panelAccent();
+    ImGui::Indent(6.0f);
     ImGui::TextColored(ImVec4(0.82f, 0.90f, 1.00f, 1.0f), "CONNECTION");
     ImGui::SameLine(128);
     ImGui::SetNextItemWidth(300);
@@ -822,7 +895,8 @@ int main(int /*argc*/, char* argv[]) {
       if (ImGui::Button("Connect") && !availablePorts.empty()) {
         if (serial.Open(availablePorts[selectedPort], 115200)) {
           connected = true;
-          statusText = "connected: " + availablePorts[selectedPort];
+          connectedPort = availablePorts[selectedPort];
+          statusText = "connected: " + connectedPort;
           log(statusText);
         } else {
           log("failed to open port");
@@ -833,12 +907,14 @@ int main(int /*argc*/, char* argv[]) {
       if (ImGui::Button("Disconnect")) {
         serial.Close();
         connected = false;
+        connectedPort = "";
         statusText = "disconnected";
         playing = false;
       }
     }
     ImGui::SameLine();
     ImGui::TextDisabled("%s", statusText.c_str());
+    ImGui::Unindent(6.0f);
     ImGui::EndChild();
 
     ImGui::Spacing();
@@ -846,18 +922,22 @@ int main(int /*argc*/, char* argv[]) {
     const float leftWidth = ImGui::GetContentRegionAvail().x * 0.43f;
     const float rightWidth = ImGui::GetContentRegionAvail().x - leftWidth - gap;
     ImGui::BeginGroup();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
     ImGui::BeginChild("library", ImVec2(leftWidth, 270), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
     panelAccent();
+    ImGui::Indent(6.0f);
     sectionHeader("SCRIPT LIBRARY");
     ImGui::SameLine();
     ImGui::TextDisabled("%d loaded", static_cast<int>(luaTests.size()));
-    ImGui::TextDisabled("Drop .json files here.");
     for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
       const LuaTest& test = luaTests[i];
       const bool selected = selectedTestIdx == i;
-      if (ImGui::Selectable(("##sel" + std::to_string(i)).c_str(), selected, 0, ImVec2(0, 18)))
+      const float rowX = ImGui::GetCursorPosX();
+      if (ImGui::Selectable(("##sel" + std::to_string(i)).c_str(), selected, 0, ImVec2(0, 20)))
         selectedTestIdx = i;
-      ImGui::SameLine(8);
+      ImGui::SameLine();
+      ImGui::SetCursorPosX(rowX + 4.0f);
       ImGui::Text("%s", test.name.c_str());
       ImGui::SameLine();
       ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -886,6 +966,7 @@ int main(int /*argc*/, char* argv[]) {
       selectedTestIdx = luaTests.empty() ? -1 : std::min(selectedTestIdx, static_cast<int>(luaTests.size()) - 1);
       saveLibrary();
     }
+    ImGui::Unindent(6.0f);
     ImGui::EndChild();
     ImGui::EndGroup();
 
@@ -903,8 +984,11 @@ int main(int /*argc*/, char* argv[]) {
 
     ImGui::SameLine(0, gap);
     ImGui::BeginGroup();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
     ImGui::BeginChild("testDetails", ImVec2(rightWidth, 270), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
     panelAccent();
+    ImGui::Indent(6.0f);
     sectionHeader("SELECTED TEST");
     if (selectedTestIdx >= 0 && selectedTestIdx < static_cast<int>(luaTests.size())) {
       LuaTest& test = luaTests[selectedTestIdx];
@@ -1051,12 +1135,16 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::Spacing();
       ImGui::TextDisabled("Drop .json files anywhere to add them.");
     }
+    ImGui::Unindent(6.0f);
     ImGui::EndChild();
     ImGui::EndGroup();
 
     ImGui::Spacing();
-    ImGui::BeginChild("storage", ImVec2(0, 50), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
+    ImGui::BeginChild("storage", ImVec2(0, 44), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
     panelAccent();
+    ImGui::Indent(6.0f);
     ImGui::TextColored(ImVec4(0.82f, 0.90f, 1.00f, 1.0f), "ADD WEAPON");
     ImGui::SameLine(130);
     ImGui::SetNextItemWidth(350);
@@ -1075,13 +1163,17 @@ int main(int /*argc*/, char* argv[]) {
         saveLibrary();
       }
     }
+    ImGui::Unindent(6.0f);
     ImGui::EndChild();
 
     // --- Log ---
     const float statusBarH = 28.0f;
     ImGui::Spacing();
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12, 8));
     ImGui::BeginChild("logPanel", ImVec2(0, ImGui::GetContentRegionAvail().y - statusBarH - 6), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::PopStyleVar();
     panelAccent();
+    ImGui::Indent(6.0f);
     sectionHeader("ACTIVITY");
     ImGui::SameLine();
     ImGui::TextDisabled("live serial output");
@@ -1129,6 +1221,7 @@ int main(int /*argc*/, char* argv[]) {
     }
     if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - 1.0f) ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
+    ImGui::Unindent(6.0f);
     ImGui::EndChild();
 
     // --- Status bar ---
@@ -1144,9 +1237,9 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::SetCursorPosY(6);
       ImGui::SetCursorPosX(14);
       if (connected) {
-        const std::string& port = (!availablePorts.empty() && selectedPort < (int)availablePorts.size())
-          ? availablePorts[selectedPort] : statusText;
-        ImGui::TextColored(ImVec4(0.50f, 0.95f, 0.65f, 1.0f), "[*] %s  @ 115200 baud", port.c_str());
+        ImGui::TextColored(ImVec4(0.50f, 0.95f, 0.65f, 1.0f), "[*] %s  @ 115200 baud", connectedPort.c_str());
+      } else if (simulate) {
+        ImGui::TextColored(ImVec4(0.65f, 0.75f, 1.00f, 1.0f), "[S] SIM MODE  --  no hardware needed");
       } else {
         ImGui::TextDisabled("[ ] not connected");
       }
