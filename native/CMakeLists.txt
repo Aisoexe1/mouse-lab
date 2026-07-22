@@ -29,7 +29,7 @@ target_include_directories(mouse_test_injector_gui PRIVATE
 target_link_libraries(mouse_test_injector_gui PRIVATE glfw OpenGL::GL)
 
 if(APPLE)
-    target_link_libraries(mouse_test_injector_gui PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreFoundation")
+    target_link_libraries(mouse_test_injector_gui PRIVATE "-framework Cocoa" "-framework IOKit" "-framework CoreFoundation" "-framework CoreGraphics")
 endif()
 
 if(WIN32)

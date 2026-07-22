@@ -9,7 +9,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,6 +16,10 @@
 #define NOMINMAX
 #include <windows.h>
 #include <commdlg.h>
+#endif
+
+#ifdef __APPLE__
+#include <CoreGraphics/CoreGraphics.h>
 #endif
 
 #include "imgui.h"
@@ -29,7 +32,7 @@
 struct Step {
   int dx = 0;
   int dy = 0;
-  int delayMs = 50;
+  float delayMs = 50.0f;
   bool left = false, right = false, middle = false;
 
   int ButtonsMask() const {
@@ -42,6 +45,7 @@ struct LuaTest {
   std::string path;
   std::vector<Step> steps;
   int hotkey = GLFW_KEY_UNKNOWN;
+  float recordedSens = 0.0f;  // 0 = not set (manual)
 };
 
 static std::string FileNameWithoutExtension(const std::string& path) {
@@ -93,21 +97,21 @@ static std::vector<std::pair<int, std::string>> LoadLuaLibrary(const std::string
   return entries;
 }
 
-static std::string OpenLuaFileDialog() {
+static std::string OpenJsonFileDialog() {
 #ifdef _WIN32
   char path[MAX_PATH] = {};
   OPENFILENAMEA dialog{};
   dialog.lStructSize = sizeof(dialog);
-  dialog.lpstrFilter = "Lua files\0*.lua\0All files\0*.*\0";
+  dialog.lpstrFilter = "JSON files\0*.json\0All files\0*.*\0";
   dialog.lpstrFile = path;
   dialog.nMaxFile = MAX_PATH;
   dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
   return GetOpenFileNameA(&dialog) ? path : "";
 #else
 #ifdef __APPLE__
-  const char* command = "osascript -e 'POSIX path of (choose file with prompt \"Select Lua test\" of type {\"lua\"})' 2>/dev/null";
+  const char* command = "osascript -e 'POSIX path of (choose file with prompt \"Select weapon JSON\" of type {\"json\"})' 2>/dev/null";
 #else
-  const char* command = "zenity --file-selection --file-filter='Lua files | *.lua' 2>/dev/null";
+  const char* command = "zenity --file-selection --file-filter='JSON files | *.json' 2>/dev/null";
 #endif
   FILE* pipe = popen(command, "r");
   if (!pipe) return "";
@@ -179,7 +183,8 @@ static void DrawParticles(const ImGuiViewport* vp, float time) {
   };
 
   const int N = 300;
-  std::vector<Particle> pts;
+  static std::vector<Particle> pts;
+  pts.clear();
   pts.reserve(N);
 
   for (int i = 0; i < N; ++i) {
@@ -268,112 +273,58 @@ static void DrawParticles(const ImGuiViewport* vp, float time) {
   }
 }
 
-static std::vector<Step> LoadScenario(const std::string& path, std::string& err) {
-  std::vector<Step> steps;
+
+// Minimal parser for {"weaponname": [{dx, dy, delay}, ...]} weapon JSON format.
+static std::vector<Step> LoadJsonScenario(const std::string& path, std::string& err) {
   std::ifstream f(path);
-  if (!f) {
-    err = "cannot open file";
-    return steps;
-  }
-  std::string line;
-  while (std::getline(f, line)) {
-    if (line.empty()) continue;
-    std::istringstream ss(line);
-    Step s;
-    int l = 0, r = 0, m = 0;
-    if (ss >> s.dx >> s.dy >> s.delayMs >> l >> r >> m) {
-      s.left = l != 0;
-      s.right = r != 0;
-      s.middle = m != 0;
-      steps.push_back(s);
+  if (!f) { err = "cannot open file"; return {}; }
+  std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+
+  const size_t arrStart = src.find('[');
+  if (arrStart == std::string::npos) { err = "no step array found"; return {}; }
+
+  std::vector<Step> steps;
+  size_t pos = arrStart + 1;
+
+  while (pos < src.size()) {
+    while (pos < src.size() && (src[pos] <= ' ' || src[pos] == ',')) ++pos;
+    if (pos >= src.size() || src[pos] == ']') break;
+    if (src[pos] != '{') { ++pos; continue; }
+    const size_t objEnd = src.find('}', pos);
+    if (objEnd == std::string::npos) break;
+    const std::string obj = src.substr(pos, objEnd - pos + 1);
+    pos = objEnd + 1;
+
+    auto getField = [&](const char* key, float& out) -> bool {
+      const std::string needle = std::string("\"") + key + "\"";
+      const size_t k = obj.find(needle);
+      if (k == std::string::npos) return false;
+      const size_t colon = obj.find(':', k + needle.size());
+      if (colon == std::string::npos) return false;
+      return std::sscanf(obj.c_str() + colon + 1, " %f", &out) == 1;
+    };
+
+    float fdx = 0, fdy = 0, delay = 50;
+    if (!getField("dx", fdx) || !getField("dy", fdy) || !getField("delay", delay)) {
+      err = "missing dx/dy/delay in step";
+      return {};
     }
+    Step s;
+    s.dx = static_cast<int>(std::clamp(fdx, -127.0f, 127.0f));
+    s.dy = static_cast<int>(std::clamp(fdy, -127.0f, 127.0f));
+    s.delayMs = delay;
+    steps.push_back(s);
   }
+
+  if (steps.empty()) err = "no steps found";
   return steps;
 }
 
-static bool SaveScenario(const std::string& path, const std::vector<Step>& steps) {
-  std::ofstream f(path);
-  if (!f) return false;
-  for (const auto& s : steps) {
-    f << s.dx << ' ' << s.dy << ' ' << s.delayMs << ' '
-      << (s.left ? 1 : 0) << ' ' << (s.right ? 1 : 0) << ' ' << (s.middle ? 1 : 0) << '\n';
-  }
-  return true;
-}
-
-static std::vector<Step> LoadLuaScenario(const std::string& path, std::string& err) {
-  std::ifstream f(path);
-  if (!f) {
-    err = "cannot open Lua file";
-    return {};
-  }
-
-  std::vector<Step> imported;
-  bool left = false, right = false, middle = false;
-  int pendingDelay = 50;
-  std::string line;
-  int lineNumber = 0;
-  while (std::getline(f, line)) {
-    ++lineNumber;
-    const size_t comment = line.find("--");
-    if (comment != std::string::npos) line.erase(comment);
-
-    size_t move = line.find("move(");
-    size_t argumentOffset = 5;
-    if (move == std::string::npos) {
-      move = line.find("MoveMouseRelative(");
-      argumentOffset = 18;
-    }
-    if (move != std::string::npos) {
-      Step step;
-      int delay = pendingDelay;
-      const int count = std::sscanf(line.c_str() + move + argumentOffset, "%d , %d , %d", &step.dx, &step.dy, &delay);
-      if (count < 2) {
-        err = "invalid move() on line " + std::to_string(lineNumber);
-        return {};
-      }
-      step.dx = std::clamp(step.dx, -127, 127);
-      step.dy = std::clamp(step.dy, -127, 127);
-      step.delayMs = std::max(0, delay);
-      step.left = left;
-      step.right = right;
-      step.middle = middle;
-      imported.push_back(step);
-      pendingDelay = 50;
-      continue;
-    }
-
-    size_t wait = line.find("sleep(");
-    if (wait == std::string::npos) wait = line.find("Sleep(");
-    if (wait == std::string::npos) wait = line.find("wait(");
-    if (wait != std::string::npos) {
-      const size_t open = line.find('(', wait);
-      int delay = 0;
-      if (std::sscanf(line.c_str() + open + 1, "%d", &delay) != 1) {
-        err = "invalid sleep()/wait() on line " + std::to_string(lineNumber);
-        return {};
-      }
-      if (imported.empty()) pendingDelay = std::max(0, delay);
-      else imported.back().delayMs = std::max(0, delay);
-      continue;
-    }
-
-    if (line.find("left_down(") != std::string::npos) left = true;
-    if (line.find("left_up(") != std::string::npos) left = false;
-    if (line.find("right_down(") != std::string::npos) right = true;
-    if (line.find("right_up(") != std::string::npos) right = false;
-    if (line.find("middle_down(") != std::string::npos) middle = true;
-    if (line.find("middle_up(") != std::string::npos) middle = false;
-  }
-  if (imported.empty()) err = "no move() commands found";
-  return imported;
-}
-
-static std::vector<std::string> gDroppedLuaPaths;
+static std::vector<std::string> gDroppedPaths;
 
 static void OnFileDrop(GLFWwindow*, int count, const char** paths) {
   for (int i = 0; i < count; ++i)
-    if (paths && paths[i]) gDroppedLuaPaths.emplace_back(paths[i]);
+    if (paths && paths[i]) gDroppedPaths.emplace_back(paths[i]);
 }
 
 int main(int /*argc*/, char* argv[]) {
@@ -408,6 +359,7 @@ int main(int /*argc*/, char* argv[]) {
   std::vector<std::string> availablePorts = SerialPort::ListPorts();
   int selectedPort = 0;
   bool connected = false;
+  bool simulate = false;
   std::string statusText = "disconnected";
 
   std::vector<Step> steps;
@@ -416,16 +368,23 @@ int main(int /*argc*/, char* argv[]) {
   int bindingTestIdx = -1;
   std::vector<char> keyWasDown(GLFW_KEY_LAST + 1, false);
   std::vector<char> mouseWasDown(GLFW_MOUSE_BUTTON_LAST + 1, false);
+  std::vector<char> globalSideMouseWasDown(8, false);
+  bool prevGlobalRmb = false, prevGlobalLmb = false;
+  bool rmbFirst = false, playingViaMouse = false;
   const std::string libraryPath = "lua_tests.library";
 
   std::vector<std::string> logLines;
-  char luaPathBuf[512] = "";
+  char jsonPathBuf[512] = "";
 
   bool playing = false;
   size_t playIdx = 0;
   double nextSendTime = 0.0;
   double lastLogTime = 0.0;
   float sensitivity = 1.0f;
+  float scriptSens = 0.8333f;
+  float gameSens = 0.8333f;
+  float smoothness = 1.0f;
+  int subIdx = 0;
 
   auto log = [&](const std::string& s) {
     const double t = glfwGetTime();
@@ -437,41 +396,49 @@ int main(int /*argc*/, char* argv[]) {
   };
 
   auto sendStep = [&](const Step& s) {
-    if (!serial.IsOpen()) return;
     const int sdx = static_cast<int>(std::clamp(s.dx * sensitivity, -127.0f, 127.0f));
     const int sdy = static_cast<int>(std::clamp(s.dy * sensitivity, -127.0f, 127.0f));
+    if (simulate) {
+#ifdef __APPLE__
+      CGEventRef ref = CGEventCreate(nullptr);
+      CGPoint pos = CGEventGetLocation(ref);
+      CFRelease(ref);
+      pos.x += sdx;
+      pos.y += sdy;
+      CGWarpMouseCursorPosition(pos);
+#endif
+      return;
+    }
+    if (!serial.IsOpen()) return;
     char buf[64];
     snprintf(buf, sizeof(buf), "M,%d,%d,%d", sdx, sdy, s.ButtonsMask());
-    if (serial.WriteLine(buf)) {
-      log(std::string("-> ") + buf);
-    } else {
-      log("send error");
-    }
+    if (!serial.WriteLine(buf)) log("send error");
   };
 
   auto saveLibrary = [&]() {
-    if (!SaveLuaLibrary(libraryPath, luaTests)) log("could not save Lua test library");
+    if (!SaveLuaLibrary(libraryPath, luaTests)) log("could not save library");
   };
 
-  auto importLua = [&](const std::string& path) {
+  auto importJson = [&](const std::string& path) {
     std::string err;
-    auto imported = LoadLuaScenario(path, err);
+    auto imported = LoadJsonScenario(path, err);
     if (!err.empty()) {
-      log("Lua import failed: " + err);
+      log("JSON import failed: " + err);
       return;
     }
     LuaTest test;
     test.name = FileNameWithoutExtension(path);
     test.path = path;
     test.steps = std::move(imported);
+    test.recordedSens = 0.8333f;
     luaTests.push_back(std::move(test));
     selectedTestIdx = static_cast<int>(luaTests.size()) - 1;
-    log("added Lua test: " + luaTests.back().name + " (" + std::to_string(luaTests.back().steps.size()) + " steps)");
+    log("loaded: " + luaTests.back().name + " (" + std::to_string(luaTests.back().steps.size()) + " steps)");
   };
 
   auto playTest = [&](int index) {
     if (index < 0 || index >= static_cast<int>(luaTests.size())) return;
-    if (!connected) {
+    if (!connected && !simulate) {
       log("cannot run " + luaTests[index].name + ": device is offline");
       return;
     }
@@ -482,30 +449,30 @@ int main(int /*argc*/, char* argv[]) {
     }
     playing = true;
     playIdx = 0;
+    subIdx = 0;
     nextSendTime = glfwGetTime();
-    log("-- running: " + luaTests[index].name + " --");
+    log("macro " + luaTests[index].name + " active");
   };
 
   for (const auto& [hotkey, path] : LoadLuaLibrary(libraryPath)) {
     const size_t previousSize = luaTests.size();
-    importLua(path);
+    importJson(path);
     if (luaTests.size() > previousSize) luaTests.back().hotkey = hotkey;
   }
 
-  // Auto-load all .lua files from the weapons/ folder next to the project root
+  // Auto-load all .json files from the weapons/ folder next to the project root
   {
     namespace fs = std::filesystem;
     const fs::path weaponsDir = fs::path(argv[0]).parent_path() / ".." / ".." / "weapons";
     std::error_code ec;
     if (fs::is_directory(weaponsDir, ec)) {
       for (const auto& entry : fs::directory_iterator(weaponsDir, ec)) {
-        if (entry.path().extension() == ".lua") {
-          const std::string p = fs::canonical(entry.path(), ec).string();
-          if (ec) continue;
-          bool already = false;
-          for (const auto& t : luaTests) if (t.path == p) { already = true; break; }
-          if (!already) importLua(p);
-        }
+        if (entry.path().extension() != ".json") continue;
+        const std::string p = fs::canonical(entry.path(), ec).string();
+        if (ec) continue;
+        bool already = false;
+        for (const auto& t : luaTests) if (t.path == p) { already = true; break; }
+        if (!already) importJson(p);
       }
     }
   }
@@ -532,13 +499,10 @@ int main(int /*argc*/, char* argv[]) {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
-    if (!gDroppedLuaPaths.empty()) {
-      for (const auto& path : gDroppedLuaPaths) {
-        std::snprintf(luaPathBuf, sizeof(luaPathBuf), "%s", path.c_str());
-        importLua(path);
-      }
+    if (!gDroppedPaths.empty()) {
+      for (const auto& path : gDroppedPaths) importJson(path);
       saveLibrary();
-      gDroppedLuaPaths.clear();
+      gDroppedPaths.clear();
     }
 
     for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; ++key) {
@@ -557,8 +521,8 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == key) {
-              log("hotkey " + KeyLabel(key) + " pressed -> " + luaTests[i].name);
-              playTest(i);
+              selectedTestIdx = i;
+              log("switched to: " + luaTests[i].name);
             }
           }
         }
@@ -566,10 +530,16 @@ int main(int /*argc*/, char* argv[]) {
       keyWasDown[key] = down;
     }
 
-    for (int button = GLFW_MOUSE_BUTTON_4; button <= GLFW_MOUSE_BUTTON_LAST; ++button) {
-      const bool down = glfwGetMouseButton(window, button) == GLFW_PRESS;
-      if (down && !mouseWasDown[button]) {
-        const int hotkey = MouseHotkey(button);
+#ifdef _WIN32
+    // Global side-button detection on Windows (GetAsyncKeyState works without focus)
+    // GLFW btn index → Windows VK code
+    static const struct { int btn; int vk; } winSideMap[] = {
+      { 2, VK_MBUTTON }, { 3, VK_XBUTTON1 }, { 4, VK_XBUTTON2 }
+    };
+    for (const auto& m : winSideMap) {
+      const bool down = (GetAsyncKeyState(m.vk) & 0x8000) != 0;
+      if (down && !globalSideMouseWasDown[m.btn]) {
+        const int hotkey = MouseHotkey(m.btn);
         if (bindingTestIdx >= 0 && bindingTestIdx < static_cast<int>(luaTests.size())) {
           for (auto& test : luaTests) if (test.hotkey == hotkey) test.hotkey = GLFW_KEY_UNKNOWN;
           luaTests[bindingTestIdx].hotkey = hotkey;
@@ -579,13 +549,62 @@ int main(int /*argc*/, char* argv[]) {
         } else {
           for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
             if (luaTests[i].hotkey == hotkey) {
-              log("hotkey " + KeyLabel(hotkey) + " pressed -> " + luaTests[i].name);
-              playTest(i);
+              selectedTestIdx = i;
+              log("switched to: " + luaTests[i].name);
             }
           }
         }
       }
-      mouseWasDown[button] = down;
+      globalSideMouseWasDown[m.btn] = down;
+    }
+#endif
+#ifdef __APPLE__
+    // Global side-button detection (works without app focus)
+    for (int btn = 2; btn < static_cast<int>(globalSideMouseWasDown.size()); ++btn) {
+      const bool down = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, (CGMouseButton)btn);
+      if (down && !globalSideMouseWasDown[btn]) {
+        const int hotkey = MouseHotkey(btn);
+        if (bindingTestIdx >= 0 && bindingTestIdx < static_cast<int>(luaTests.size())) {
+          for (auto& test : luaTests) if (test.hotkey == hotkey) test.hotkey = GLFW_KEY_UNKNOWN;
+          luaTests[bindingTestIdx].hotkey = hotkey;
+          log("bound " + KeyLabel(hotkey) + " to " + luaTests[bindingTestIdx].name);
+          bindingTestIdx = -1;
+          saveLibrary();
+        } else {
+          for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
+            if (luaTests[i].hotkey == hotkey) {
+              selectedTestIdx = i;
+              log("switched to: " + luaTests[i].name);
+            }
+          }
+        }
+      }
+      globalSideMouseWasDown[btn] = down;
+    }
+#endif
+
+    // Global RMB→LMB trigger (works without focus on the app window).
+    {
+#ifdef __APPLE__
+      const bool curRmb = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight);
+      const bool curLmb = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft);
+#else
+      const bool curRmb = false, curLmb = false;
+#endif
+      if (curRmb && !prevGlobalRmb && !curLmb) rmbFirst = true;
+      if (!curRmb) { rmbFirst = false; }
+
+      if (rmbFirst && curLmb && !prevGlobalLmb && !playing && selectedTestIdx >= 0) {
+        playTest(selectedTestIdx);
+        playingViaMouse = true;
+      }
+      if (playingViaMouse && !curLmb) {
+        playing = false;
+        playingViaMouse = false;
+        log("-- stopped (LMB released) --");
+      }
+      prevGlobalRmb = curRmb;
+      prevGlobalLmb = curLmb;
     }
 
     // Drain any incoming serial lines.
@@ -601,15 +620,24 @@ int main(int /*argc*/, char* argv[]) {
     }
 
     // Scenario playback (time-based, non-blocking).
-    if (playing && connected) {
+    if (playing && (connected || simulate)) {
       double now = glfwGetTime();
       if (now >= nextSendTime) {
         if (playIdx < steps.size()) {
-          sendStep(steps[playIdx]);
-          nextSendTime = now + steps[playIdx].delayMs / 1000.0 / static_cast<double>(speedMult);
-          playIdx++;
+          const Step& cs = steps[playIdx];
+          const int nSub = std::max(1, (int)std::round(smoothness));
+          Step sub = cs;
+          sub.dx = static_cast<int>(std::round(cs.dx / static_cast<float>(nSub)));
+          sub.dy = static_cast<int>(std::round(cs.dy / static_cast<float>(nSub)));
+          sendStep(sub);
+          nextSendTime = now + cs.delayMs / 1000.0 / static_cast<double>(speedMult) / nSub;
+          if (++subIdx >= nSub) {
+            subIdx = 0;
+            playIdx++;
+          }
         } else {
           playing = false;
+          subIdx = 0;
           log("-- playback finished --");
         }
       }
@@ -666,7 +694,8 @@ int main(int /*argc*/, char* argv[]) {
     ImGui::SetNextWindowBgAlpha(0.0f);
     ImGui::Begin("root", nullptr,
                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     // --- Header ---
     {
@@ -696,7 +725,7 @@ int main(int /*argc*/, char* argv[]) {
       }
       ImGui::Text("%s", title);
       ImGui::SameLine();
-      ImGui::TextDisabled("\xe2\x80\x94  test injector");
+      ImGui::TextDisabled("\xe2\x80\x94  Macro by Aiso.exe");
 
       // Device status (right-aligned)
       ImGui::SameLine(winW - (connected ? 178.0f : 195.0f));
@@ -772,13 +801,12 @@ int main(int /*argc*/, char* argv[]) {
     const float leftWidth = ImGui::GetContentRegionAvail().x * 0.43f;
     const float rightWidth = ImGui::GetContentRegionAvail().x - leftWidth - gap;
     ImGui::BeginGroup();
-    ImGui::BeginChild("library", ImVec2(leftWidth, 270), true);
+    ImGui::BeginChild("library", ImVec2(leftWidth, 270), true, ImGuiWindowFlags_NoScrollbar);
     panelAccent();
-    sectionHeader("LUA TEST LIBRARY");
+    sectionHeader("SCRIPT LIBRARY");
     ImGui::SameLine();
-    ImGui::TextDisabled("%d saved", static_cast<int>(luaTests.size()));
-    ImGui::TextDisabled("Drop .lua files to add tests.");
-    ImGui::BeginChild("testList", ImVec2(0, 170), false);
+    ImGui::TextDisabled("%d loaded", static_cast<int>(luaTests.size()));
+    ImGui::TextDisabled("Drop .json files here.");
     for (int i = 0; i < static_cast<int>(luaTests.size()); ++i) {
       const LuaTest& test = luaTests[i];
       const bool selected = selectedTestIdx == i;
@@ -787,7 +815,6 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::SameLine(8);
       ImGui::Text("%s", test.name.c_str());
       ImGui::SameLine();
-      // step count badge
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const std::string countStr = std::to_string(test.steps.size());
       const ImVec2 countSize = ImGui::CalcTextSize(countStr.c_str());
@@ -796,7 +823,6 @@ int main(int /*argc*/, char* argv[]) {
       dl->AddRectFilled(badgeMin, badgeMax, IM_COL32(60, 80, 120, 180), 4.0f);
       dl->AddText(ImVec2(badgeMin.x + 5, badgeMin.y + 1), IM_COL32(180, 210, 255, 255), countStr.c_str());
       ImGui::Dummy(ImVec2(countSize.x + 14, 0));
-      // hotkey badge
       if (test.hotkey != GLFW_KEY_UNKNOWN) {
         ImGui::SameLine();
         const std::string hk = KeyLabel(test.hotkey);
@@ -809,8 +835,7 @@ int main(int /*argc*/, char* argv[]) {
         ImGui::Dummy(ImVec2(hkSize.x + 14, 0));
       }
     }
-    if (luaTests.empty()) ImGui::TextDisabled("No tests yet — drop a .lua file here.");
-    ImGui::EndChild();
+    if (luaTests.empty()) ImGui::TextDisabled("No weapons — drop .json here.");
     if (ImGui::Button("\xe2\x9c\x95  Remove") && selectedTestIdx >= 0 && selectedTestIdx < static_cast<int>(luaTests.size())) {
       luaTests.erase(luaTests.begin() + selectedTestIdx);
       selectedTestIdx = luaTests.empty() ? -1 : std::min(selectedTestIdx, static_cast<int>(luaTests.size()) - 1);
@@ -819,9 +844,21 @@ int main(int /*argc*/, char* argv[]) {
     ImGui::EndChild();
     ImGui::EndGroup();
 
+    // Auto-fill scriptSens when switching to a weapon that has a known recorded sensitivity
+    {
+      static int prevSelectedTestIdx = -1;
+      if (selectedTestIdx != prevSelectedTestIdx) {
+        if (selectedTestIdx >= 0 && selectedTestIdx < static_cast<int>(luaTests.size())) {
+          const float rs = luaTests[selectedTestIdx].recordedSens;
+          if (rs > 0.0f) scriptSens = rs;
+        }
+        prevSelectedTestIdx = selectedTestIdx;
+      }
+    }
+
     ImGui::SameLine(0, gap);
     ImGui::BeginGroup();
-    ImGui::BeginChild("testDetails", ImVec2(rightWidth, 270), true);
+    ImGui::BeginChild("testDetails", ImVec2(rightWidth, 270), true, ImGuiWindowFlags_NoScrollbar);
     panelAccent();
     sectionHeader("SELECTED TEST");
     if (selectedTestIdx >= 0 && selectedTestIdx < static_cast<int>(luaTests.size())) {
@@ -854,54 +891,37 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::TextDisabled("%s", test.path.c_str());
       ImGui::Spacing();
 
-      // Two columns: step list | trajectory canvas
-      const float colH = 108.0f;
-      const float avail = ImGui::GetContentRegionAvail().x;
-
-      ImGui::BeginChild("stepList2", ImVec2(avail * 0.42f, colH), false);
-      for (int si = 0; si < (int)test.steps.size(); ++si) {
-        const Step& s = test.steps[si];
-        const bool active = playing && (int)playIdx == si;
-        if (active) {
-          ImDrawList* adl = ImGui::GetWindowDrawList();
-          const ImVec2 ap = ImGui::GetCursorScreenPos();
-          adl->AddRectFilled(ap, ImVec2(ap.x + ImGui::GetContentRegionAvail().x,
-            ap.y + ImGui::GetTextLineHeightWithSpacing()), IM_COL32(40, 90, 180, 75));
-          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.50f, 0.88f, 1.00f, 1.00f));
+      // Trajectory canvas — path cached, only rebuilt on weapon change
+      static int cachedTrajIdx = -1;
+      static std::vector<ImVec2> trajPos;
+      static float trajMinX = 0, trajMaxX = 0, trajMinY = 0, trajMaxY = 0;
+      if (cachedTrajIdx != selectedTestIdx) {
+        cachedTrajIdx = selectedTestIdx;
+        trajPos.clear();
+        trajMinX = trajMaxX = trajMinY = trajMaxY = 0;
+        float cx2 = 0, cy2 = 0;
+        trajPos.push_back({0.0f, 0.0f});
+        for (const auto& s : test.steps) {
+          cx2 += s.dx; cy2 += s.dy;
+          trajPos.push_back({cx2, cy2});
+          if (cx2 < trajMinX) trajMinX = cx2; if (cx2 > trajMaxX) trajMaxX = cx2;
+          if (cy2 < trajMinY) trajMinY = cy2; if (cy2 > trajMaxY) trajMaxY = cy2;
         }
-        ImGui::TextDisabled("%2d", si + 1);
-        ImGui::SameLine();
-        char sb[40];
-        snprintf(sb, sizeof(sb), "(%+d,%+d) %dms", s.dx, s.dy, s.delayMs);
-        ImGui::Text("%s", sb);
-        if (active) { ImGui::PopStyleColor(); ImGui::SetScrollHereY(0.5f); }
       }
-      ImGui::EndChild();
 
-      ImGui::SameLine(0, 8);
-
-      // Trajectory canvas
+      const float colH = 120.0f;
       ImGui::BeginChild("traj", ImVec2(0, colH), true, ImGuiWindowFlags_NoScrollbar);
-      if (!test.steps.empty()) {
+      if (trajPos.size() > 1) {
         ImDrawList* tdl = ImGui::GetWindowDrawList();
         const ImVec2 cp = ImGui::GetWindowPos();
         const ImVec2 cs = ImGui::GetWindowSize();
         const float pad = 12.0f;
 
-        std::vector<ImVec2> pos;
-        pos.reserve(test.steps.size() + 1);
-        float cx2 = 0, cy2 = 0, minX2 = 0, maxX2 = 0, minY2 = 0, maxY2 = 0;
-        pos.push_back({0.0f, 0.0f});
-        for (const auto& s : test.steps) {
-          cx2 += s.dx; cy2 += s.dy;
-          pos.push_back({cx2, cy2});
-          if (cx2 < minX2) minX2 = cx2; if (cx2 > maxX2) maxX2 = cx2;
-          if (cy2 < minY2) minY2 = cy2; if (cy2 > maxY2) maxY2 = cy2;
-        }
-        const float rng = std::max(std::max(maxX2 - minX2, maxY2 - minY2), 1.0f);
+        const float rng = std::max(std::max(trajMaxX - trajMinX, trajMaxY - trajMinY), 1.0f);
         const float sc2 = (std::min(cs.x, cs.y) - pad * 2) / rng;
-        const float ox2 = cp.x + cs.x * 0.5f - (minX2 + maxX2) * 0.5f * sc2;
-        const float oy2 = cp.y + cs.y * 0.5f - (minY2 + maxY2) * 0.5f * sc2;
+        const float ox2 = cp.x + cs.x * 0.5f - (trajMinX + trajMaxX) * 0.5f * sc2;
+        const float oy2 = cp.y + cs.y * 0.5f - (trajMinY + trajMaxY) * 0.5f * sc2;
+        const auto& pos = trajPos;
 
         // Cross-hair at origin
         tdl->AddLine(ImVec2(ox2 - 5, oy2), ImVec2(ox2 + 5, oy2), IM_COL32(60, 80, 120, 100));
@@ -949,15 +969,30 @@ int main(int /*argc*/, char* argv[]) {
       if (ImGui::Button("\xe2\x96\xb6 Run", ImVec2(72, 0))) playTest(selectedTestIdx);
       ImGui::PopStyleColor(2);
       ImGui::SameLine();
+      ImGui::Checkbox("sim", &simulate);
+      ImGui::SameLine();
       if (playing && ImGui::Button("\xe2\x96\xa0 Stop")) {
         playing = false;
         log("-- playback stopped --");
       }
 
       ImGui::Spacing();
+      {
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.75f, 1.00f, 1.00f));
+        ImGui::Text("my sens");
+        ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(140.0f);
+        if (ImGui::InputFloat("##gsens", &gameSens, 0.0f, 0.0f, "%.6f"))
+          gameSens = std::clamp(gameSens, 0.01f, 2.0f);
+        sensitivity = scriptSens / gameSens;
+        ImGui::PushStyleColor(ImGuiCol_TextDisabled, ImVec4(0.70f, 0.70f, 0.70f, 1.00f));
+        ImGui::TextDisabled("scale: %.4fx", sensitivity);
+        ImGui::PopStyleColor();
+      }
       ImGui::SetNextItemWidth(-1);
-      ImGui::SliderFloat("##sens", &sensitivity, 0.1f, 3.0f, "sens  %.2fx");
-      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Scale dx/dy of all moves");
+      ImGui::SliderFloat("##smooth", &smoothness, 0.1f, 2.5f, "smooth  %.1f");
+      if (ImGui::IsItemHovered()) ImGui::SetTooltip("Split each move into N sub-steps");
 
       if (playing && !steps.empty()) {
         ImGui::Spacing();
@@ -967,49 +1002,47 @@ int main(int /*argc*/, char* argv[]) {
       }
     } else {
       ImGui::Spacing();
-      ImGui::TextDisabled("Select a test from the library to preview it.");
+      ImGui::TextDisabled("Select a script from the library to preview it.");
       ImGui::Spacing();
-      ImGui::TextDisabled("Drop a .lua file anywhere in the window to add it.");
+      ImGui::TextDisabled("Drop .lua or .json files anywhere to add them.");
     }
     ImGui::EndChild();
     ImGui::EndGroup();
 
     ImGui::Spacing();
-    ImGui::BeginChild("storage", ImVec2(0, 70), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild("storage", ImVec2(0, 50), true, ImGuiWindowFlags_NoScrollbar);
     panelAccent();
-    ImGui::TextColored(ImVec4(0.82f, 0.90f, 1.00f, 1.0f), "ADD LUA TEST");
+    ImGui::TextColored(ImVec4(0.82f, 0.90f, 1.00f, 1.0f), "ADD WEAPON");
     ImGui::SameLine(130);
     ImGui::SetNextItemWidth(350);
-    ImGui::InputTextWithHint("##luaPath", "Drop a .lua file or paste its path", luaPathBuf, sizeof(luaPathBuf));
+    ImGui::InputTextWithHint("##jsonPath", "Paste .json path or drop file into window", jsonPathBuf, sizeof(jsonPathBuf));
     ImGui::SameLine();
-    if (ImGui::Button("Add test")) {
-      importLua(luaPathBuf);
+    if (ImGui::Button("Add")) {
+      importJson(std::string(jsonPathBuf));
       saveLibrary();
     }
     ImGui::SameLine();
     if (ImGui::Button("Browse...")) {
-      const std::string selectedPath = OpenLuaFileDialog();
-      if (!selectedPath.empty()) {
-        std::snprintf(luaPathBuf, sizeof(luaPathBuf), "%s", selectedPath.c_str());
-        importLua(selectedPath);
+      const std::string p = OpenJsonFileDialog();
+      if (!p.empty()) {
+        std::snprintf(jsonPathBuf, sizeof(jsonPathBuf), "%s", p.c_str());
+        importJson(p);
         saveLibrary();
       }
     }
-    ImGui::SameLine();
-    ImGui::TextDisabled("move(dx, dy[, delay]) · sleep(ms)");
     ImGui::EndChild();
 
     // --- Log ---
     const float statusBarH = 28.0f;
     ImGui::Spacing();
-    ImGui::BeginChild("logPanel", ImVec2(0, ImGui::GetContentRegionAvail().y - statusBarH - 6), true);
+    ImGui::BeginChild("logPanel", ImVec2(0, ImGui::GetContentRegionAvail().y - statusBarH - 6), true, ImGuiWindowFlags_NoScrollbar);
     panelAccent();
     sectionHeader("ACTIVITY");
     ImGui::SameLine();
     ImGui::TextDisabled("live serial output");
     ImGui::SameLine(ImGui::GetWindowWidth() - 72);
     if (ImGui::SmallButton("Clear")) logLines.clear();
-    ImGui::BeginChild("log", ImVec2(0, 0), false);
+    ImGui::BeginChild("log", ImVec2(0, 0), false, ImGuiWindowFlags_NoScrollbar);
     {
       const float flashDur = 0.75f;
       const float logAge = static_cast<float>(glfwGetTime() - lastLogTime);
