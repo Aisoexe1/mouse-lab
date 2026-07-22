@@ -772,6 +772,22 @@ int main(int /*argc*/, char* argv[]) {
       prevGlobalLmb = curLmb;
     }
 
+#ifdef _WIN32
+    // Ctrl+Shift+O restores the window even when iconified (hidden from Alt+Tab).
+    {
+      static bool prevRestoreCombo = false;
+      const bool restoreCombo = (GetAsyncKeyState(VK_CONTROL) & 0x8000) &&
+                                 (GetAsyncKeyState(VK_SHIFT)   & 0x8000) &&
+                                 (GetAsyncKeyState('O')         & 0x8000);
+      if (restoreCombo && !prevRestoreCombo) {
+        glfwRestoreWindow(window);
+        glfwShowWindow(window);
+        glfwFocusWindow(window);
+      }
+      prevRestoreCombo = restoreCombo;
+    }
+#endif
+
     // Drain any incoming serial lines.
     if (connected) {
       std::vector<std::string> lines;
@@ -886,7 +902,12 @@ int main(int /*argc*/, char* argv[]) {
       fdl->AddCircleFilled(miniC, btnR, miniHov ? IM_COL32(235, 170, 0, 255) : IM_COL32(175, 128, 0, 200));
       if (miniHov)
         fdl->AddLine({miniC.x - 3.5f, miniC.y}, {miniC.x + 3.5f, miniC.y}, IM_COL32(100, 70, 0, 255), 1.6f);
-      if (miniHov && ImGui::IsMouseClicked(0)) glfwIconifyWindow(window);
+      if (miniHov && ImGui::IsMouseClicked(0)) {
+        glfwIconifyWindow(window);
+#ifdef _WIN32
+        log("minimized  --  Ctrl+Shift+O to restore");
+#endif
+      }
     }
 
     ImGui::SetNextWindowPos(vp->WorkPos);
