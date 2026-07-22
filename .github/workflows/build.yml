@@ -28,10 +28,10 @@ jobs:
 
       - name: Package release zip
         run: |
-          mkdir release
-          copy build\Release\mouse_test_injector_gui.exe release\
-          xcopy weapons release\weapons\ /E /I /Q
-          Compress-Archive -Path release\* -DestinationPath macro-windows.zip
+          New-Item -ItemType Directory -Path release | Out-Null
+          Copy-Item "build\Release\mouse_test_injector_gui.exe" "release\"
+          Copy-Item -Recurse "weapons" "release\weapons"
+          Compress-Archive -Path "release\*" -DestinationPath "macro-windows.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
