@@ -505,7 +505,6 @@ int main(int /*argc*/, char* argv[]) {
     }
   }
 
-  float speedMult = 1.0f;
   bool  isDragging = false;
   int   dragWX = 0, dragWY = 0;
 
@@ -676,7 +675,7 @@ int main(int /*argc*/, char* argv[]) {
           sub.dx = static_cast<int>(std::round(cs.dx / static_cast<float>(nSub)));
           sub.dy = static_cast<int>(std::round(cs.dy / static_cast<float>(nSub)));
           sendStep(sub);
-          nextSendTime = now + cs.delayMs / 1000.0 / static_cast<double>(speedMult) / nSub;
+          nextSendTime = now + cs.delayMs / 1000.0 / nSub;
           if (++subIdx >= nSub) {
             subIdx = 0;
             playIdx++;
