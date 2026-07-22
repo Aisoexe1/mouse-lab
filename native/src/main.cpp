@@ -28,6 +28,10 @@
 
 #include "serial_port.h"
 
+#ifdef HAVE_EMBEDDED_WEAPONS
+#include "weapons_embedded.h"
+#endif
+
 struct Step {
   int dx = 0;
   int dy = 0;
@@ -286,11 +290,7 @@ static void DrawParticles(const ImGuiViewport* vp, float time) {
 
 
 // Minimal parser for {"weaponname": [{dx, dy, delay}, ...]} weapon JSON format.
-static std::vector<Step> LoadJsonScenario(const std::string& path, std::string& err) {
-  std::ifstream f(path);
-  if (!f) { err = "cannot open file"; return {}; }
-  std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-
+static std::vector<Step> ParseJsonContent(const std::string& src, std::string& err) {
   const size_t arrStart = src.find('[');
   if (arrStart == std::string::npos) { err = "no step array found"; return {}; }
 
@@ -329,6 +329,13 @@ static std::vector<Step> LoadJsonScenario(const std::string& path, std::string& 
 
   if (steps.empty()) err = "no steps found";
   return steps;
+}
+
+static std::vector<Step> LoadJsonScenario(const std::string& path, std::string& err) {
+  std::ifstream f(path);
+  if (!f) { err = "cannot open file"; return {}; }
+  const std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+  return ParseJsonContent(src, err);
 }
 
 static std::vector<std::string> gDroppedPaths;
@@ -404,6 +411,7 @@ int main(int /*argc*/, char* argv[]) {
   namespace fs = std::filesystem;
   const fs::path exeDir = fs::path(argv[0]).parent_path();
   const std::string libraryPath = (exeDir / "lua_tests.library").string();
+  const std::string kEmbedPfx = "embedded://";
 
   std::vector<std::string> logLines;
   char jsonPathBuf[512] = "";
@@ -466,16 +474,54 @@ int main(int /*argc*/, char* argv[]) {
     if (!SaveLuaLibrary(libraryPath, luaTests)) log("could not save library");
   };
 
-  auto importJson = [&](const std::string& path) {
-    std::string err;
-    auto imported = LoadJsonScenario(path, err);
-    if (!err.empty()) {
-      log("JSON import failed: " + err);
-      return;
+  auto importJson = [&](const std::string& pathArg) {
+    const bool isEmbedScheme = pathArg.size() > kEmbedPfx.size() &&
+                               pathArg.compare(0, kEmbedPfx.size(), kEmbedPfx) == 0;
+    std::string err, usedPath = pathArg;
+    std::vector<Step> imported;
+
+    if (isEmbedScheme) {
+#ifdef HAVE_EMBEDDED_WEAPONS
+      const std::string fname = pathArg.substr(kEmbedPfx.size());
+      for (int i = 0; i < kEmbeddedWeaponCount; ++i) {
+        if (fname == kEmbeddedWeapons[i].filename) {
+          std::string content(kEmbeddedWeapons[i].data, kEmbeddedWeapons[i].size);
+          imported = ParseJsonContent(content, err);
+          break;
+        }
+      }
+      if (imported.empty() && err.empty()) err = "not found in embedded data";
+#else
+      err = "embedded weapons not compiled in";
+#endif
+    } else {
+      imported = LoadJsonScenario(pathArg, err);
+#ifdef HAVE_EMBEDDED_WEAPONS
+      if (imported.empty()) {
+        const std::string fname = fs::path(pathArg).filename().string();
+        for (int i = 0; i < kEmbeddedWeaponCount; ++i) {
+          if (fname == kEmbeddedWeapons[i].filename) {
+            std::string content(kEmbeddedWeapons[i].data, kEmbeddedWeapons[i].size);
+            std::string e2;
+            auto attempt = ParseJsonContent(content, e2);
+            if (!attempt.empty()) {
+              imported = std::move(attempt);
+              usedPath = kEmbedPfx + fname;
+              err.clear();
+            }
+            break;
+          }
+        }
+      }
+#endif
     }
+
+    if (!err.empty()) { log("JSON import failed: " + err); return; }
+    if (imported.empty()) { log("JSON import failed: no steps"); return; }
+
     LuaTest test;
-    test.name = FileNameWithoutExtension(path);
-    test.path = path;
+    test.name = FileNameWithoutExtension(usedPath);
+    test.path = usedPath;
     test.steps = std::move(imported);
     test.recordedSens = 0.8333f;
     luaTests.push_back(std::move(test));
@@ -507,11 +553,13 @@ int main(int /*argc*/, char* argv[]) {
     if (luaTests.size() > previousSize) luaTests.back().hotkey = hotkey;
   }
 
-  // Auto-load all .json files from weapons/ — look next to exe first (for users),
-  // then two levels up (for dev builds in native/build/).
+  // Auto-load all .json files from weapons/.
+  // Search order: next to exe → Contents/Resources/weapons (app bundle) → ../../weapons (dev build).
   {
     fs::path weaponsDir = exeDir / "weapons";
     std::error_code ecCheck;
+    if (!fs::is_directory(weaponsDir, ecCheck))
+      weaponsDir = exeDir / ".." / "Resources" / "weapons";
     if (!fs::is_directory(weaponsDir, ecCheck))
       weaponsDir = exeDir / ".." / ".." / "weapons";
     std::error_code ec;
@@ -526,6 +574,19 @@ int main(int /*argc*/, char* argv[]) {
       }
     }
   }
+
+  // Load any embedded weapons not yet covered by the library or weapons folder.
+#ifdef HAVE_EMBEDDED_WEAPONS
+  for (int i = 0; i < kEmbeddedWeaponCount; ++i) {
+    const std::string fname(kEmbeddedWeapons[i].filename);
+    const std::string embPath = kEmbedPfx + fname;
+    bool already = false;
+    for (const auto& t : luaTests)
+      if (t.path == embPath || fs::path(t.path).filename().string() == fname)
+        { already = true; break; }
+    if (!already) importJson(embPath);
+  }
+#endif
 
   bool   isDragging = false;
   double dragCurX = 0, dragCurY = 0;
@@ -989,7 +1050,8 @@ int main(int /*argc*/, char* argv[]) {
           ImGui::Dummy(ImVec2(hsz.x + 14, 0));
         }
       }
-      ImGui::TextDisabled("%s", test.path.c_str());
+      const bool isEmbedded = test.path.compare(0, kEmbedPfx.size(), kEmbedPfx) == 0;
+      ImGui::TextDisabled("%s", isEmbedded ? "(built-in)" : test.path.c_str());
       ImGui::Spacing();
 
       // Trajectory canvas — path cached, only rebuilt on weapon change
