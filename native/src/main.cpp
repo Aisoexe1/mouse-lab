@@ -600,6 +600,9 @@ int main(int /*argc*/, char* argv[]) {
 #ifdef __APPLE__
       const bool curRmb = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight);
       const bool curLmb = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft);
+#elif defined(_WIN32)
+      const bool curRmb = (GetAsyncKeyState(VK_RBUTTON) & 0x8000) != 0;
+      const bool curLmb = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
 #else
       const bool curRmb = false, curLmb = false;
 #endif
