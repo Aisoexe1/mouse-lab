@@ -12,16 +12,14 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install GLFW via vcpkg
-        run: |
-          vcpkg install glfw3:x64-windows
-          vcpkg integrate install
+        run: vcpkg install glfw3:x64-windows
 
       - name: Configure CMake
-        run: |
-          cmake -B build -S native `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_TOOLCHAIN_FILE="C:/vcpkg/scripts/buildsystems/vcpkg.cmake" `
-            -DVCPKG_TARGET_TRIPLET=x64-windows
+        run: >
+          cmake -B build -S native
+          -DCMAKE_BUILD_TYPE=Release
+          "-DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          -DVCPKG_TARGET_TRIPLET=x64-windows
 
       - name: Build
         run: cmake --build build --config Release
