@@ -75,6 +75,18 @@ static int MouseHotkey(int button) {
   return -1000 - button;
 }
 
+#ifdef _WIN32
+static int GlfwKeyToVK(int key) {
+  if (key >= GLFW_KEY_A && key <= GLFW_KEY_Z)   return 'A' + (key - GLFW_KEY_A);
+  if (key >= GLFW_KEY_0 && key <= GLFW_KEY_9)   return '0' + (key - GLFW_KEY_0);
+  if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F12) return VK_F1 + (key - GLFW_KEY_F1);
+  if (key == GLFW_KEY_SPACE) return VK_SPACE;
+  if (key == GLFW_KEY_ENTER) return VK_RETURN;
+  if (key == GLFW_KEY_TAB)   return VK_TAB;
+  return 0;
+}
+#endif
+
 static bool SaveLuaLibrary(const std::string& path, const std::vector<LuaTest>& tests) {
   std::ofstream f(path);
   if (!f) return false;
@@ -346,6 +358,10 @@ int main(int /*argc*/, char* argv[]) {
     glfwTerminate();
     return 1;
   }
+  {
+    const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
+    if (mode) glfwSetWindowPos(window, (mode->width - 1120) / 2, (mode->height - 720) / 2);
+  }
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   glfwSetDropCallback(window, OnFileDrop);
@@ -569,6 +585,21 @@ int main(int /*argc*/, char* argv[]) {
       }
       globalSideMouseWasDown[m.btn] = down;
     }
+    // Global keyboard hotkey detection on Windows (works without focus)
+    if (!glfwGetWindowAttrib(window, GLFW_FOCUSED)) {
+      for (int i = 0; i < (int)luaTests.size(); ++i) {
+        const int hotkey = luaTests[i].hotkey;
+        if (hotkey < 0 || hotkey == GLFW_KEY_UNKNOWN) continue;
+        const int vk = GlfwKeyToVK(hotkey);
+        if (vk == 0) continue;
+        const bool down = (GetAsyncKeyState(vk) & 0x8000) != 0;
+        if (down && !keyWasDown[hotkey]) {
+          selectedTestIdx = i;
+          log("switched to: " + luaTests[i].name);
+        }
+        keyWasDown[hotkey] = down;
+      }
+    }
 #endif
 #ifdef __APPLE__
     // Global side-button detection (works without app focus)
@@ -740,7 +771,7 @@ int main(int /*argc*/, char* argv[]) {
       }
       ImGui::Text("%s", title);
       ImGui::SameLine();
-      ImGui::TextDisabled("\xe2\x80\x94  Macro by Aiso.exe");
+      ImGui::TextDisabled("-  Macro by Aiso.exe");
 
       // Device status (right-aligned)
       ImGui::SameLine(winW - (connected ? 178.0f : 195.0f));
@@ -750,11 +781,11 @@ int main(int /*argc*/, char* argv[]) {
       } else {
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.60f, 0.75f, 1.0f));
       }
-      ImGui::Text("%s", connected ? "\xe2\x97\x8f  DEVICE ONLINE" : "\xe2\x97\x8b  DEVICE OFFLINE");
+      ImGui::Text("%s", connected ? "[*] DEVICE ONLINE" : "[ ] DEVICE OFFLINE");
       ImGui::PopStyleColor();
 
       // Subtitle
-      ImGui::TextDisabled("precision mouse input validation \xe2\x80\x94 send relative-move sequences to firmware");
+      ImGui::TextDisabled("precision mouse input validation - send relative-move sequences to firmware");
 
       // Gradient separator line below header
       const ImVec2 sep = ImGui::GetCursorScreenPos();
@@ -851,7 +882,7 @@ int main(int /*argc*/, char* argv[]) {
       }
     }
     if (luaTests.empty()) ImGui::TextDisabled("No weapons — drop .json here.");
-    if (ImGui::Button("\xe2\x9c\x95  Remove") && selectedTestIdx >= 0 && selectedTestIdx < static_cast<int>(luaTests.size())) {
+    if (ImGui::Button("x  Remove") && selectedTestIdx >= 0 && selectedTestIdx < static_cast<int>(luaTests.size())) {
       luaTests.erase(luaTests.begin() + selectedTestIdx);
       selectedTestIdx = luaTests.empty() ? -1 : std::min(selectedTestIdx, static_cast<int>(luaTests.size()) - 1);
       saveLibrary();
@@ -981,12 +1012,12 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::SameLine();
       ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.82f, 0.88f, 1.00f, 0.94f));
       ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.04f, 0.06f, 0.10f, 1.00f));
-      if (ImGui::Button("\xe2\x96\xb6 Run", ImVec2(72, 0))) playTest(selectedTestIdx);
+      if (ImGui::Button("> Run", ImVec2(72, 0))) playTest(selectedTestIdx);
       ImGui::PopStyleColor(2);
       ImGui::SameLine();
       ImGui::Checkbox("sim", &simulate);
       ImGui::SameLine();
-      if (playing && ImGui::Button("\xe2\x96\xa0 Stop")) {
+      if (playing && ImGui::Button("Stop")) {
         playing = false;
         log("-- playback stopped --");
       }
@@ -1019,7 +1050,7 @@ int main(int /*argc*/, char* argv[]) {
       ImGui::Spacing();
       ImGui::TextDisabled("Select a script from the library to preview it.");
       ImGui::Spacing();
-      ImGui::TextDisabled("Drop .lua or .json files anywhere to add them.");
+      ImGui::TextDisabled("Drop .json files anywhere to add them.");
     }
     ImGui::EndChild();
     ImGui::EndGroup();
@@ -1116,17 +1147,17 @@ int main(int /*argc*/, char* argv[]) {
       if (connected) {
         const std::string& port = (!availablePorts.empty() && selectedPort < (int)availablePorts.size())
           ? availablePorts[selectedPort] : statusText;
-        ImGui::TextColored(ImVec4(0.50f, 0.95f, 0.65f, 1.0f), "\xe2\x97\x8f  %s  @ 115200 baud", port.c_str());
+        ImGui::TextColored(ImVec4(0.50f, 0.95f, 0.65f, 1.0f), "[*] %s  @ 115200 baud", port.c_str());
       } else {
-        ImGui::TextDisabled("\xe2\x97\x8b  not connected");
+        ImGui::TextDisabled("[ ] not connected");
       }
       if (!luaTests.empty()) {
         ImGui::SameLine(360);
-        ImGui::TextDisabled("%d tests  \xc2\xb7  %d steps", static_cast<int>(luaTests.size()), totalSteps);
+        ImGui::TextDisabled("%d tests  |  %d steps", static_cast<int>(luaTests.size()), totalSteps);
       }
       if (playing && !steps.empty()) {
         ImGui::SameLine(560);
-        ImGui::TextColored(ImVec4(0.50f, 0.82f, 1.00f, 1.0f), "\xe2\x96\xb6  step %d / %d",
+        ImGui::TextColored(ImVec4(0.50f, 0.82f, 1.00f, 1.0f), ">  step %d / %d",
                            static_cast<int>(playIdx), static_cast<int>(steps.size()));
       }
       ImGui::EndChild();
