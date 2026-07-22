@@ -26,8 +26,7 @@ jobs:
       - name: Package release zip
         run: |
           New-Item -ItemType Directory -Path release | Out-Null
-          Copy-Item "build\Release\mouse_test_injector_gui.exe" "release\"
-          Copy-Item -Recurse "weapons" "release\weapons"
+          Copy-Item "build\Release\overlay.exe" "release\"
           Compress-Archive -Path "release\*" -DestinationPath "macro-windows.zip"
 
       - name: Upload artifact

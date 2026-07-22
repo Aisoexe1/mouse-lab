@@ -43,6 +43,7 @@ target_include_directories(mouse_test_injector_gui PRIVATE
     "${CMAKE_CURRENT_BINARY_DIR}"
 )
 
+set_target_properties(mouse_test_injector_gui PROPERTIES OUTPUT_NAME "overlay")
 target_compile_definitions(mouse_test_injector_gui PRIVATE HAVE_EMBEDDED_WEAPONS)
 
 target_link_libraries(mouse_test_injector_gui PRIVATE glfw OpenGL::GL)

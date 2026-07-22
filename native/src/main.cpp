@@ -14,6 +14,7 @@
 #define NOMINMAX
 #include <windows.h>
 #include <commdlg.h>
+#define GLFW_EXPOSE_NATIVE_WIN32
 #endif
 
 #ifdef __APPLE__
@@ -27,6 +28,7 @@
 #include <GLFW/glfw3.h>
 
 #include "serial_port.h"
+#include <GLFW/glfw3native.h>
 
 #ifdef HAVE_EMBEDDED_WEAPONS
 #include "weapons_embedded.h"
@@ -290,11 +292,21 @@ static void DrawParticles(const ImGuiViewport* vp, float time) {
 
 
 #ifdef HAVE_EMBEDDED_WEAPONS
-static std::string DecryptWeapon(const char* data, std::size_t size, const char* key) {
-  std::string out(data, size);
-  const std::size_t klen = std::strlen(key);
-  for (std::size_t i = 0; i < size; ++i)
-    out[i] ^= key[i % klen];
+static std::string DecryptWeapon(const unsigned char* enc, std::size_t sz, const char* id) {
+  // Mirror of embed_weapons.py: reverse layers 3 → 2 → 1.
+  // Split constants so they don't form a contiguous key block in the binary.
+  const unsigned char A=0x9E, B=0x37, C=0x79, D=0xB9;
+  const unsigned char E=0x7F, F=0x4A, G=0x7C, H=0x15;
+  const unsigned char K[8] = {A,B,C,D,E,F,G,H};
+  const std::size_t ilen = std::strlen(id);
+  std::string out(reinterpret_cast<const char*>(enc), sz);
+  // Reverse L3 – nibble swap (involution)
+  for (auto& ch : out) { auto b=(unsigned char)ch; ch=(char)(((b<<4)|(b>>4))); }
+  // Reverse L2 – filename-derived XOR
+  for (std::size_t i=0; i<sz; ++i)
+    out[i] ^= (unsigned char)(((unsigned char)id[i%ilen]*0x1B+0x37)&0xFF);
+  // Reverse L1 – fixed key XOR
+  for (std::size_t i=0; i<sz; ++i) out[i] ^= K[i%8];
   return out;
 }
 #endif
@@ -369,7 +381,7 @@ int main(int /*argc*/, char* argv[]) {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 #endif
 
-  GLFWwindow* window = glfwCreateWindow(1120, 720, "Mouse Driver Test Injector", nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(1120, 720, "Overlay", nullptr, nullptr);
   if (!window) {
     glfwTerminate();
     return 1;
@@ -378,6 +390,17 @@ int main(int /*argc*/, char* argv[]) {
     const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor());
     if (mode) glfwSetWindowPos(window, (mode->width - 1120) / 2, (mode->height - 720) / 2);
   }
+
+  // Keep window floating above other apps (overlay behaviour).
+  glfwSetWindowAttrib(window, GLFW_FLOATING, GLFW_TRUE);
+
+#ifdef _WIN32
+  // Remove from Alt+Tab switcher and taskbar on Windows.
+  HWND hwnd = glfwGetWin32Window(window);
+  LONG_PTR ex = GetWindowLongPtrA(hwnd, GWL_EXSTYLE);
+  SetWindowLongPtrA(hwnd, GWL_EXSTYLE, (ex | WS_EX_TOOLWINDOW) & ~WS_EX_APPWINDOW);
+#endif
+
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
   glfwSetDropCallback(window, OnFileDrop);
