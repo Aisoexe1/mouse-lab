@@ -34,4 +34,6 @@ endif()
 
 if(WIN32)
     target_link_libraries(mouse_test_injector_gui PRIVATE setupapi comdlg32)
+    set_target_properties(mouse_test_injector_gui PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_options(mouse_test_injector_gui PRIVATE /ENTRY:mainCRTStartup)
 endif()

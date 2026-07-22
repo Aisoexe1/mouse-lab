@@ -328,6 +328,9 @@ static void OnFileDrop(GLFWwindow*, int count, const char** paths) {
 }
 
 int main(int /*argc*/, char* argv[]) {
+#ifdef _WIN32
+  SetProcessDPIAware();
+#endif
   if (!glfwInit()) return 1;
 
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -408,6 +411,10 @@ int main(int /*argc*/, char* argv[]) {
       pos.x += sdx;
       pos.y += sdy;
       CGWarpMouseCursorPosition(pos);
+#elif defined(_WIN32)
+      POINT pt;
+      GetCursorPos(&pt);
+      SetCursorPos(pt.x + sdx, pt.y + sdy);
 #endif
       return;
     }
