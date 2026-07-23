@@ -803,8 +803,14 @@ int main(int /*argc*/, char* argv[]) {
             inp.type = INPUT_MOUSE;
             inp.mi.mouseData = (DWORD)((unsigned int)(delta * 120) << 16);
             inp.mi.dwFlags = MOUSEEVENTF_WHEEL;
-            SendInput(1, &inp, sizeof(INPUT));
-          } catch (...) {}
+            UINT sent = SendInput(1, &inp, sizeof(INPUT));
+            if (sent > 0)
+              log("scroll W," + std::to_string(delta) + " -> SendInput OK");
+            else {
+              DWORD err = GetLastError();
+              log("scroll W," + std::to_string(delta) + " -> SendInput FAIL err=" + std::to_string(err));
+            }
+          } catch (...) { log("scroll parse error: " + l); }
 #endif
           continue;
         }
