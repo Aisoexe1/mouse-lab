@@ -793,7 +793,23 @@ int main(int /*argc*/, char* argv[]) {
         connectedPort = "";
         statusText = "disconnected";
       }
-      for (auto& l : lines) if (l != "OK") log(l);
+      for (auto& l : lines) {
+        if (l == "OK") continue;
+        if (l.size() > 2 && l[0] == 'W' && l[1] == ',') {
+#ifdef _WIN32
+          try {
+            int delta = std::stoi(l.substr(2));
+            INPUT inp = {};
+            inp.type = INPUT_MOUSE;
+            inp.mi.mouseData = (DWORD)((unsigned int)(delta * 120) << 16);
+            inp.mi.dwFlags = MOUSEEVENTF_WHEEL;
+            SendInput(1, &inp, sizeof(INPUT));
+          } catch (...) {}
+#endif
+          continue;
+        }
+        log(l);
+      }
     }
 
     // Auto-scan ports every 2 s when not connected so hot-plugged devices appear.
