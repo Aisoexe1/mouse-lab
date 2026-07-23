@@ -59,9 +59,17 @@ class INPUT(ctypes.Structure):
     _fields_ = [("type", wt.DWORD), ("_u", _INPUT_UNION)]
 
 
-HOOKPROC    = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_int, wt.WPARAM, wt.LPARAM)
+LRESULT     = ctypes.c_longlong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_long
+HOOKPROC    = ctypes.WINFUNCTYPE(LRESULT, ctypes.c_int, wt.WPARAM, wt.LPARAM)
 _INPUT_SIZE = ctypes.sizeof(INPUT)
 _hook       = None
+
+# Explicit argtypes so ctypes handles 64-bit lParam pointer correctly on x64
+u32.CallNextHookEx.argtypes  = [ctypes.c_void_p, ctypes.c_int, wt.WPARAM, wt.LPARAM]
+u32.CallNextHookEx.restype   = LRESULT
+u32.SetWindowsHookExA.argtypes = [ctypes.c_int, HOOKPROC, wt.HINSTANCE, wt.DWORD]
+u32.SetWindowsHookExA.restype  = ctypes.c_void_p
+u32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
 
 
 def _send_wheel(flags: int, delta: int) -> None:
