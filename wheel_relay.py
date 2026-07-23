@@ -72,24 +72,34 @@ u32.SetWindowsHookExA.restype  = ctypes.c_void_p
 u32.UnhookWindowsHookEx.argtypes = [ctypes.c_void_p]
 
 
+u32.SendInput.argtypes = [ctypes.c_uint, ctypes.c_void_p, ctypes.c_int]
+u32.SendInput.restype  = ctypes.c_uint
+
+
 def _send_wheel(flags: int, delta: int) -> None:
     inp = INPUT()
     inp.type            = INPUT_MOUSE
     inp.mi.mouseData    = wt.DWORD((delta << 16) & 0xFFFFFFFF)
     inp.mi.dwFlags      = flags
     inp.mi.dwExtraInfo  = 0
-    u32.SendInput(1, ctypes.byref(inp), _INPUT_SIZE)
+    sent = u32.SendInput(1, ctypes.byref(inp), _INPUT_SIZE)
+    if sent == 0:
+        err = ctypes.windll.kernel32.GetLastError()
+        print(f"[!] SendInput failed, error={err}")
+    else:
+        print(f"[+] Scroll injected: delta={delta}")
 
 
 def _proc(nCode: int, wParam: int, lParam: int) -> int:
     if nCode >= 0 and wParam in (WM_MOUSEWHEEL, WM_MOUSEHWHEEL):
         ms = ctypes.cast(lParam, ctypes.POINTER(MSLLHOOKSTRUCT)).contents
         if not (ms.flags & LLMHF_INJECTED):
-            # Hardware scroll event — re-inject as synthetic and block original
             delta = ctypes.c_short(ms.mouseData >> 16).value
+            print(f"[~] Hardware scroll caught: delta={delta}")
             flags = MOUSEEVENTF_WHEEL if wParam == WM_MOUSEWHEEL else MOUSEEVENTF_HWHEEL
             _send_wheel(flags, delta)
-            return 1   # block original (prevents double-scroll in menus)
+            return 1
+        # else: injected event (our own SendInput) — pass through
     return u32.CallNextHookEx(_hook, nCode, wParam, lParam)
 
 
